@@ -15,7 +15,7 @@ jobs:
       - name: Fetch all forks and sync
         run: |
           set -e
-          # 获取所有仓库
+          # 获取全部仓库
           json=$(curl -s -H "Authorization: token $MY_TOKEN" "https://api.github.com/users/${USER}/repos?per_page=100")
 
           if ! echo "$json" | jq -e 'type == "array"' >/dev/null; then
@@ -24,35 +24,53 @@ jobs:
             exit 1
           fi
 
-          # 输出json数组，安全遍历
-          echo "$json" | jq -c '.[] | select(.fork==true) | {full_name, parent: (.parent // {}), default_branch}' | while read -r item; do
-            repo_full=$(echo "$item" | jq -r '.full_name')
-            upstream_full=$(echo "$item" | jq -r '.parent.full_name // ""')
-            branch=$(echo "$item" | jq -r '.default_branch')
+          echo "===== 扫描到的所有Fork清单 ====="
+          echo "$json" | jq -r '.[] | select(.fork==true) | .full_name'
+          echo "=============================="
 
-            echo "===== 正在同步：$repo_full  上游：$upstream_full 分支：$branch ====="
-
-            # 上游为空直接跳过
+          echo "$json" | jq -r '.[] | select(.fork==true) | .full_name' | while read -r repo_full; do
+            echo ""
+            echo "===== 处理仓库：$repo_full ====="
+            # 仓库详情接口，拿到上游
+            detail=$(curl -s -H "Authorization: token $MY_TOKEN" "https://api.github.com/repos/${repo_full}")
+            upstream_full=$(echo "$detail" | jq -r '.parent.full_name // ""')
             if [ -z "$upstream_full" ] || [ "$upstream_full" = "null" ]; then
-              echo "⚠️ 该fork没有上游源，跳过"
+              echo "⚠️ 无上游源，跳过"
+              sleep 1
               continue
             fi
+            echo "上游仓库：$upstream_full"
+
+            # 获取该仓库所有分支名称
+            branches=$(curl -s -H "Authorization: token $MY_TOKEN" "https://api.github.com/repos/${repo_full}/branches" | jq -r '.[].name')
+            echo "本仓库所有分支："
+            echo "$branches"
 
             git clone --depth 1 "https://${USER}:${MY_TOKEN}@github.com/${repo_full}.git" repo_sync
             cd repo_sync
             git remote add upstream "https://github.com/${upstream_full}.git" || true
             git fetch upstream
-            git checkout "$branch"
 
-            # 合并失败就跳过，不中断
-            if git merge "upstream/$branch"; then
-              git push origin "$branch"
-              echo "✅ $repo_full 同步成功"
-            else
-              echo "⚠️ 合并冲突，跳过推送 $repo_full"
-            fi
+            # 遍历每一个分支
+            echo "$branches" | while read -r br; do
+              [ -z "$br" ] && continue
+              echo "---- 分支【$br】 ----"
+              git checkout "$br"
+              # 尝试合并上游同分支，冲突直接失败退出，不强行提交
+              if git merge "upstream/$br"; then
+                git push origin "$br"
+                echo "✅ 分支 $br 同步成功"
+              else
+                echo "⚠️ 分支 $br 合并冲突，放弃推送"
+                git merge --abort || true
+              fi
+              sleep 0.5
+            done
 
             cd ..
             rm -rf repo_sync
+            # 限流：每个仓库处理完休眠1秒，防止403
+            sleep 1
           done
+          echo ""
           echo "🎉 全部fork扫描结束"
