@@ -1,2 +1,2 @@
 # fork-sync-center
-自动同步fork的仓库
+强制自动同步所有fork的仓库
