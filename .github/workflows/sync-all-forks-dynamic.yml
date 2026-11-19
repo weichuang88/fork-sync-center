@@ -5,7 +5,7 @@ on:
     - cron: '0 */4 * * *'
 
 env:
-  GH_TOKEN: ${{ secrets.GH_TOKEN }}
+  MY_TOKEN: ${{ secrets.MY_TOKEN }}
 
 jobs:
   sync:
