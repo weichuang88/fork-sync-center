@@ -1,0 +1,52 @@
+name: Dynamic Sync All Forks
+on:
+  schedule:
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
+
+env:
+  GH_TOKEN: ${{ secrets.MY_TOKEN }}
+  EXCLUDE: ""
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch all forks and sync
+        run: |
+          set -e
+          git config --global user.name "weichuang88"
+          git config --global user.email "weichuang88@users.noreply.github.com"
+          EXCLUDE_LIST=($EXCLUDE)
+          in_exclude() {
+            local r=$1
+            for e in "${EXCLUDE_LIST[@]}"; do
+              if [[ "$e" == "$r" ]]; then return 0; fi
+            done
+            return 1
+          }
+          repos=$(curl -s -H "Authorization: token $GH_TOKEN" "https://api.github.com/user/repos?per_page=100")
+          echo "$repos" | jq -r '.[] | select(.fork==true) | .name,.parent.full_name,.default_branch' | while read -r repo_name; do
+            read -r parent_full
+            read -r def_branch
+            if in_exclude "$repo_name"; then
+              echo "==== Skip $repo_name (in exclude list) ===="
+              continue
+            fi
+            if [[ -z "$parent_full" ]]; then
+              echo "==== Skip $repo_name: no upstream parent ===="
+              continue
+            fi
+            upstream_owner=$(echo "$parent_full" | cut -d/ -f1)
+            upstream_repo=$(echo "$parent_full" | cut -d/ -f2)
+            echo "==== Sync $repo_name | upstream: $upstream_owner/$upstream_repo | branch: $def_branch ===="
+            git clone https://${GH_TOKEN}@github.com/weichuang88/${repo_name}.git
+            cd "$repo_name"
+            git remote add upstream https://github.com/${upstream_owner}/${upstream_repo}.git
+            git fetch upstream
+            git checkout "$def_branch"
+            git reset --hard upstream/"$def_branch"
+            git push origin "$def_branch" --force
+            cd ..
+            rm -rf "$repo_name"
+          done
