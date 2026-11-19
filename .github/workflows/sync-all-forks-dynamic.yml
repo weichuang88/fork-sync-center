@@ -2,10 +2,11 @@ name: Dynamic Sync All Forks
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */4 * * *'
+    - cron: '0 4 * * *'
 
 env:
   MY_TOKEN: ${{ secrets.MY_TOKEN }}
+  USER: weichuang88
 
 jobs:
   sync:
@@ -14,31 +15,38 @@ jobs:
       - name: Fetch all forks and sync
         run: |
           set -e
-          json=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/user/repos)
+          # 获取当前用户所有仓库
+          json=$(curl -s -H "Authorization: token $MY_TOKEN" "https://api.github.com/users/${USER}/repos?per_page=100")
           # 判断返回是不是JSON数组
           if ! echo "$json" | jq -e 'type == "array"' >/dev/null; then
             echo "❌ API返回不是JSON，token错误/限流！"
             echo "$json"
             exit 1
           fi
-          echo "$json" | jq -r '.[] | select(.fork==true) | .name,.full_name,.parent.full_name,.default_branch' | while read -r repo_name; do
-            read -r repo_full
-            read -r upstream_full
-            read -r def_branch
-
-            if [[ "$upstream_full" == "null" ]]; then
-              echo "==== Skip $repo_full : upstream parent is null ===="
+          # 筛选所有fork仓库，输出：仓库全名 上游仓库全名 默认分支
+          echo "$json" | jq -r '.[] | select(.fork==true) | [.full_name, .parent.full_name, .default_branch] | @tsv' | while IFS=$'\t' read -r repo_full upstream_full branch; do
+            echo "===== 正在同步：$repo_full  上游：$upstream_full 分支：$branch ====="
+            if [ "$upstream_full" = "null" ]; then
+              echo "跳过，无上游仓库"
               continue
             fi
-
-            echo "==== Sync $repo_full | upstream: $upstream_full | branch: $def_branch ===="
-            git clone "https://${GH_TOKEN}@github.com/${repo_full}.git"
-            cd "$repo_name"
-            git remote add upstream "https://github.com/${upstream_full}.git"
+            # 克隆fork仓库
+            git clone --depth 1 "https://${USER}:${MY_TOKEN}@github.com/${repo_full}.git" repo_sync
+            cd repo_sync
+            # 添加上游源
+            git remote add upstream "https://github.com/${upstream_full}.git" || true
             git fetch upstream
-            git checkout "$def_branch"
-            git reset --hard upstream/"$def_branch"
-            git push origin "$def_branch" --force
+            git checkout "$branch"
+            # 合并上游，冲突不阻断，只打日志
+            git merge "upstream/$branch" || {
+              echo "⚠️ 合并冲突，跳过本次推送 $repo_full"
+              cd ..
+              rm -rf repo_sync
+              continue
+            }
+            git push origin "$branch"
             cd ..
-            rm -rf "$repo_name"
+            rm -rf repo_sync
+            echo "✅ $repo_full 同步完成"
           done
+          echo "🎉 全部fork扫描执行完毕"
