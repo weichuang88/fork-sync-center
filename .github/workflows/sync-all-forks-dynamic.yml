@@ -1,12 +1,11 @@
 name: Dynamic Sync All Forks
 on:
+  workflow_dispatch:
   schedule:
     - cron: '0 */4 * * *'
-  workflow_dispatch:
 
 env:
-  GH_TOKEN: ${{ secrets.MY_TOKEN }}
-  EXCLUDE: ""
+  GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
 jobs:
   sync:
@@ -15,34 +14,20 @@ jobs:
       - name: Fetch all forks and sync
         run: |
           set -e
-          git config --global user.name "weichuang88"
-          git config --global user.email "weichuang88@users.noreply.github.com"
-          EXCLUDE_LIST=($EXCLUDE)
-          in_exclude() {
-            local r=$1
-            for e in "${EXCLUDE_LIST[@]}"; do
-              if [[ "$e" == "$r" ]]; then return 0; fi
-            done
-            return 1
-          }
-          repos=$(curl -s -H "Authorization: token $GH_TOKEN" "https://api.github.com/user/repos?per_page=100")
-          echo "$repos" | jq -r '.[] | select(.fork==true) | .name,.parent.full_name,.default_branch' | while read -r repo_name; do
-            read -r parent_full
+          curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/user/repos | jq -r '.[] | select(.fork==true) | .name,.full_name,.parent.full_name,.default_branch' | while read -r repo_name; do
+            read -r repo_full
+            read -r upstream_full
             read -r def_branch
-            if in_exclude "$repo_name"; then
-              echo "==== Skip $repo_name (in exclude list) ===="
+
+            if [[ "$upstream_full" == "null" ]]; then
+              echo "==== Skip $repo_full : upstream parent is null ===="
               continue
             fi
-            if [[ -z "$parent_full" ]]; then
-              echo "==== Skip $repo_name: no upstream parent ===="
-              continue
-            fi
-            upstream_owner=$(echo "$parent_full" | cut -d/ -f1)
-            upstream_repo=$(echo "$parent_full" | cut -d/ -f2)
-            echo "==== Sync $repo_name | upstream: $upstream_owner/$upstream_repo | branch: $def_branch ===="
-            git clone https://${GH_TOKEN}@github.com/weichuang88/${repo_name}.git
+
+            echo "==== Sync $repo_full | upstream: $upstream_full | branch: $def_branch ===="
+            git clone "https://${GH_TOKEN}@github.com/${repo_full}.git"
             cd "$repo_name"
-            git remote add upstream https://github.com/${upstream_owner}/${upstream_repo}.git
+            git remote add upstream "https://github.com/${upstream_full}.git"
             git fetch upstream
             git checkout "$def_branch"
             git reset --hard upstream/"$def_branch"
