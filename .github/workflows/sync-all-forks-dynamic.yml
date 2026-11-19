@@ -14,7 +14,14 @@ jobs:
       - name: Fetch all forks and sync
         run: |
           set -e
-          curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/user/repos | jq -r '.[] | select(.fork==true) | .name,.full_name,.parent.full_name,.default_branch' | while read -r repo_name; do
+          json=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/user/repos)
+          # 判断返回是不是JSON数组
+          if ! echo "$json" | jq -e 'type == "array"' >/dev/null; then
+            echo "❌ API返回不是JSON，token错误/限流！"
+            echo "$json"
+            exit 1
+          fi
+          echo "$json" | jq -r '.[] | select(.fork==true) | .name,.full_name,.parent.full_name,.default_branch' | while read -r repo_name; do
             read -r repo_full
             read -r upstream_full
             read -r def_branch
