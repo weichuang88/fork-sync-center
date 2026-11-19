@@ -15,38 +15,44 @@ jobs:
       - name: Fetch all forks and sync
         run: |
           set -e
-          # 获取当前用户所有仓库
+          # 获取所有仓库
           json=$(curl -s -H "Authorization: token $MY_TOKEN" "https://api.github.com/users/${USER}/repos?per_page=100")
-          # 判断返回是不是JSON数组
+
           if ! echo "$json" | jq -e 'type == "array"' >/dev/null; then
             echo "❌ API返回不是JSON，token错误/限流！"
             echo "$json"
             exit 1
           fi
-          # 筛选所有fork仓库，输出：仓库全名 上游仓库全名 默认分支
-          echo "$json" | jq -r '.[] | select(.fork==true) | [.full_name, .parent.full_name, .default_branch] | @tsv' | while IFS=$'\t' read -r repo_full upstream_full branch; do
+
+          # 输出json数组，安全遍历
+          echo "$json" | jq -c '.[] | select(.fork==true) | {full_name, parent: (.parent // {}), default_branch}' | while read -r item; do
+            repo_full=$(echo "$item" | jq -r '.full_name')
+            upstream_full=$(echo "$item" | jq -r '.parent.full_name // ""')
+            branch=$(echo "$item" | jq -r '.default_branch')
+
             echo "===== 正在同步：$repo_full  上游：$upstream_full 分支：$branch ====="
-            if [ "$upstream_full" = "null" ]; then
-              echo "跳过，无上游仓库"
+
+            # 上游为空直接跳过
+            if [ -z "$upstream_full" ] || [ "$upstream_full" = "null" ]; then
+              echo "⚠️ 该fork没有上游源，跳过"
               continue
             fi
-            # 克隆fork仓库
+
             git clone --depth 1 "https://${USER}:${MY_TOKEN}@github.com/${repo_full}.git" repo_sync
             cd repo_sync
-            # 添加上游源
             git remote add upstream "https://github.com/${upstream_full}.git" || true
             git fetch upstream
             git checkout "$branch"
-            # 合并上游，冲突不阻断，只打日志
-            git merge "upstream/$branch" || {
-              echo "⚠️ 合并冲突，跳过本次推送 $repo_full"
-              cd ..
-              rm -rf repo_sync
-              continue
-            }
-            git push origin "$branch"
+
+            # 合并失败就跳过，不中断
+            if git merge "upstream/$branch"; then
+              git push origin "$branch"
+              echo "✅ $repo_full 同步成功"
+            else
+              echo "⚠️ 合并冲突，跳过推送 $repo_full"
+            fi
+
             cd ..
             rm -rf repo_sync
-            echo "✅ $repo_full 同步完成"
           done
-          echo "🎉 全部fork扫描执行完毕"
+          echo "🎉 全部fork扫描结束"
